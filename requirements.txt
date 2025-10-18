@@ -2,3 +2,5 @@ aws-cdk-lib
 constructs
 strands-sdk
 boto3
+requests
+python-dotenv
