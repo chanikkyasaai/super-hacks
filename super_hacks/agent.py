@@ -5,7 +5,31 @@ import json
 from decimal import Decimal
 from datetime import datetime
 import os
-from tools import prioritize_patch, run_sandbox_test, list_patches
+
+# Import tools module robustly so this file can be executed both as a package
+# (super_hacks.agent) and as a top-level module during local tests.
+try:
+    # When running as a package
+    from super_hacks import tools as _tools
+except Exception:
+    try:
+        # When running in lambda bundle where top-level modules are available
+        import tools as _tools
+    except Exception:
+        _tools = None
+
+if _tools is not None:
+    prioritize_patch = getattr(_tools, 'prioritize_patch')
+    run_sandbox_test = getattr(_tools, 'run_sandbox_test')
+    list_patches = getattr(_tools, 'list_patches')
+else:
+    # Define fallbacks that raise if used
+    def _missing(*args, **kwargs):
+        raise RuntimeError('tools module not available')
+
+    prioritize_patch = _missing
+    run_sandbox_test = _missing
+    list_patches = _missing
 
 # Load local .env for developer convenience if python-dotenv is available.
 try:
@@ -158,6 +182,41 @@ def lambda_handler(event, context):
                     print('list_events error:', e)
                     return make_response(500, {"error": "list_events failed"})
 
+            if action == 'list_deployments':
+                try:
+                    from tools import list_deployments
+                    return make_response(200, list_deployments())
+                except Exception as e:
+                    print('list_deployments error:', e)
+                    return make_response(500, {"error": "list_deployments failed"})
+
+            if action == 'bulk_deploy':
+                patch_ids = body.get('patch_ids') or event.get('patch_ids')
+                if not patch_ids:
+                    return make_response(400, {"error": "patch_ids required"})
+                try:
+                    from tools import bulk_deploy
+                except Exception:
+                    try:
+                        bulk_deploy = getattr(_tools, 'bulk_deploy')
+                    except Exception:
+                        return make_response(500, {"error": "bulk_deploy not available"})
+                return make_response(200, bulk_deploy(patch_ids))
+
+            if action == 'bulk_rollback':
+                patch_ids = body.get('patch_ids') or event.get('patch_ids')
+                reason = body.get('reason') or event.get('reason')
+                if not patch_ids:
+                    return make_response(400, {"error": "patch_ids required"})
+                try:
+                    from tools import bulk_rollback
+                except Exception:
+                    try:
+                        bulk_rollback = getattr(_tools, 'bulk_rollback')
+                    except Exception:
+                        return make_response(500, {"error": "bulk_rollback not available"})
+                return make_response(200, bulk_rollback(patch_ids, reason=reason))
+
             if action == 'list_compliance':
                 try:
                     from tools import list_compliance
@@ -177,6 +236,57 @@ def lambda_handler(event, context):
                 if not patch_id:
                     return make_response(400, {"error": "patch_id required"})
                 return make_response(200, run_sandbox_test(patch_id))
+
+            if action == 'deploy_patch':
+                pid = (
+                    body.get('patch_id')
+                    or body.get('patchId')
+                    or event.get('patch_id')
+                    or event.get('patchId')
+                )
+                if not pid:
+                    return make_response(400, {"error": "patch_id required"})
+                try:
+                    # lazy import from tools module if available
+                    from tools import deploy_patch
+                except Exception:
+                    try:
+                        deploy_patch = getattr(_tools, 'deploy_patch')
+                    except Exception:
+                        return make_response(500, {"error": "deploy_patch not available"})
+                return make_response(200, deploy_patch(pid, scheduled_time=body.get('scheduled_time')))
+
+            if action == 'rollback_patch':
+                pid = (
+                    body.get('patch_id')
+                    or body.get('patchId')
+                    or event.get('patch_id')
+                    or event.get('patchId')
+                )
+                if not pid:
+                    return make_response(400, {"error": "patch_id required"})
+                reason = body.get('reason') or event.get('reason')
+                try:
+                    from tools import rollback_patch
+                except Exception:
+                    try:
+                        rollback_patch = getattr(_tools, 'rollback_patch')
+                    except Exception:
+                        return make_response(500, {"error": "rollback_patch not available"})
+                return make_response(200, rollback_patch(pid, reason=reason))
+
+            if action == 'generate_compliance':
+                try:
+                    from tools import generate_compliance_report
+                except Exception:
+                    try:
+                        generate_compliance_report = getattr(
+                            _tools, 'generate_compliance_report')
+                    except Exception:
+                        return make_response(500, {"error": "generate_compliance not available"})
+                report_name = body.get(
+                    'report_name') or event.get('report_name')
+                return make_response(200, generate_compliance_report(report_name))
 
             if action == 'prioritize':
                 # Accept CVE info from body or top-level event

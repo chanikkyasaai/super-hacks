@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { fetchCompliance } from "@/lib/api";
+import { fetchCompliance, generateCompliance } from "@/lib/api";
 import { ComplianceFramework, StatCardProps } from "@/types/dashboard";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -42,6 +42,12 @@ const ComplianceView = () => {
 		queryKey: ["compliance"],
 		queryFn: fetchCompliance,
 	});
+
+	const handleGenerate = () => {
+		generateCompliance()
+			.then((res) => alert("Report generated: " + JSON.stringify(res)))
+			.catch((err) => alert("Failed to generate report: " + err.message));
+	};
 	const frameworks: ComplianceFramework[] = data?.frameworks ?? [];
 
 	const getStatusIcon = (status: ComplianceFramework["status"]) => {
@@ -81,7 +87,7 @@ const ComplianceView = () => {
 							</p>
 						</div>
 						<div className="flex gap-2">
-							<Button variant="outline">
+							<Button variant="outline" onClick={handleGenerate}>
 								<Filter className="h-4 w-4 mr-2" />
 								Filter
 							</Button>

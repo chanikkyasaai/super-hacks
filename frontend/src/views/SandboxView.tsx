@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { runSandbox } from "@/lib/api";
+import { deployPatch, rollbackPatch, runSandbox } from "@/lib/api";
 import {
 	AIRecommendation,
 	SandboxTest,
@@ -95,6 +95,21 @@ const SandboxView = () => {
 		}
 	};
 
+	const handleDeploy = () => {
+		if (!patchId) return alert("No patch id");
+		deployPatch(patchId)
+			.then((res) => alert("Deploy result: " + JSON.stringify(res)))
+			.catch((err) => alert("Deploy failed: " + err.message));
+	};
+
+	const handleRollback = () => {
+		if (!patchId) return alert("No patch id");
+		const reason = prompt("Reason for rollback (optional):") || undefined;
+		rollbackPatch(patchId, reason)
+			.then((res) => alert("Rollback result: " + JSON.stringify(res)))
+			.catch((err) => alert("Rollback failed: " + err.message));
+	};
+
 	return (
 		<div className="min-h-screen bg-background p-8">
 			<div className="max-w-7xl mx-auto space-y-8">
@@ -106,6 +121,14 @@ const SandboxView = () => {
 						<Badge variant="outline" className="text-lg px-3 py-1">
 							{patchId}
 						</Badge>
+						<div className="ml-4 flex gap-2">
+							<Button variant="default" onClick={handleDeploy}>
+								Deploy
+							</Button>
+							<Button variant="outline" onClick={handleRollback}>
+								Rollback
+							</Button>
+						</div>
 					</div>
 					<p className="text-muted-foreground">
 						Interactive testing and validation for patch deployment

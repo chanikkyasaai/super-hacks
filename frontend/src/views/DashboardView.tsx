@@ -4,10 +4,17 @@ import StatCard from "@/components/StatCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import UpcomingDeployment from "@/components/UpcomingDeployment";
-import { fetchAssets, fetchPatches } from "@/lib/api";
+import {
+	bulkDeploy,
+	bulkRollback,
+	fetchAssets,
+	fetchDeployments,
+	fetchPatches,
+} from "@/lib/api";
 import { DeploymentItem, PatchItem, StatCardProps } from "@/types/dashboard";
 import { useQuery } from "@tanstack/react-query";
 import { Play, RotateCcw } from "lucide-react";
+import { useState } from "react";
 
 const DashboardView = () => {
 	const { data: assetsData } = useQuery({
@@ -65,24 +72,52 @@ const DashboardView = () => {
 		} as PatchItem;
 	});
 
-	const deployments: DeploymentItem[] = [
-		{
-			title: "Production Database Migration",
-			time: "Today, 2:00 PM",
-		},
-		{
-			title: "API Gateway Update v3.2.1",
-			time: "Today, 4:30 PM",
-		},
-		{
-			title: "Security Patch Rollout",
-			time: "Tomorrow, 10:00 AM",
-		},
-		{
-			title: "Frontend Build Deployment",
-			time: "Tomorrow, 2:00 PM",
-		},
-	];
+	const { data: deploymentsData, isLoading: depLoading } = useQuery({
+		queryKey: ["deployments"],
+		queryFn: fetchDeployments,
+	});
+	const deployments: DeploymentItem[] = (
+		deploymentsData?.deployments ?? []
+	).map((d: any) => ({
+		title: `${d.patchId ?? "-"} — ${d.message ?? "deployment"}`,
+		time: d.timestamp ?? "",
+	}));
+
+	const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+	const toggle = (id: string) => setSelected((s) => ({ ...s, [id]: !s[id] }));
+
+	const selectAll = () => {
+		const map: Record<string, boolean> = {};
+		(rawPatches || []).forEach((p: any, i: number) => {
+			const id = p.patchId ?? p.id ?? `patch-${i}`;
+			map[id] = true;
+		});
+		setSelected(map);
+	};
+
+	const deploySelected = () => {
+		const ids = Object.keys(selected).filter((k) => selected[k]);
+		if (!ids.length) return alert("No patches selected");
+		bulkDeploy(ids)
+			.then((res) => {
+				alert("Bulk deploy result: " + JSON.stringify(res));
+				window.location.reload();
+			})
+			.catch((err) => alert("Bulk deploy failed: " + err.message));
+	};
+
+	const rollbackSelected = () => {
+		const ids = Object.keys(selected).filter((k) => selected[k]);
+		if (!ids.length) return alert("No patches selected");
+		const reason = prompt("Reason for rollback (optional):") || undefined;
+		bulkRollback(ids, reason)
+			.then((res) => {
+				alert("Bulk rollback result: " + JSON.stringify(res));
+				window.location.reload();
+			})
+			.catch((err) => alert("Bulk rollback failed: " + err.message));
+	};
 
 	const compliancePercentage = 94;
 
@@ -118,13 +153,28 @@ const DashboardView = () => {
 										</p>
 									</div>
 									<div className="flex gap-2">
-										<Button size="sm" variant="default">
+										<Button
+											size="sm"
+											variant="default"
+											onClick={selectAll}
+										>
+											Select All
+										</Button>
+										<Button
+											size="sm"
+											variant="default"
+											onClick={deploySelected}
+										>
 											<Play className="h-4 w-4 mr-2" />
 											Deploy Selected
 										</Button>
-										<Button size="sm" variant="outline">
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={rollbackSelected}
+										>
 											<RotateCcw className="h-4 w-4 mr-2" />
-											Rollback
+											Rollback Selected
 										</Button>
 									</div>
 								</div>
@@ -139,12 +189,28 @@ const DashboardView = () => {
 										Failed to load patches
 									</div>
 								) : (
-									patches.map((patch, idx) => (
-										<PatchQueueItem
-											key={patch.id ?? idx}
-											patch={patch}
-										/>
-									))
+									patches.map((patch, idx) => {
+										const id = patch.id ?? `patch-${idx}`;
+										return (
+											<div
+												key={id}
+												className="flex items-center"
+											>
+												<input
+													type="checkbox"
+													checked={!!selected[id]}
+													onChange={() => toggle(id)}
+													className="m-4"
+													id={`chk-${id}`}
+												/>
+												<div className="flex-1">
+													<PatchQueueItem
+														patch={patch}
+													/>
+												</div>
+											</div>
+										);
+									})
 								)}
 							</div>
 						</Card>
