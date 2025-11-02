@@ -8,6 +8,8 @@
 [![CDK](https://img.shields.io/badge/AWS%20CDK-2.0-FF9900)](https://aws.amazon.com/cdk/)
 [![SuperHacks 2025](https://img.shields.io/badge/SuperHacks-2025-success)](https://superhacks.devpost.com/)
 
+🌐 **[Live Demo](https://ipo-iota.vercel.app/)** | 💾 **[GitHub](https://github.com/chanikkyasaai/super-hacks)**
+
 ---
 
 ## 🎯 **Vision**
