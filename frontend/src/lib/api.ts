@@ -61,12 +61,25 @@ export async function fetchEvents() {
 }
 
 export async function fetchCompliance() {
+	console.log("Fetching compliance frameworks...");
 	const res = await fetch(`${API_BASE}/invoke`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ action: "list_compliance" }),
 	});
 	if (!res.ok) throw new Error("Failed to fetch compliance");
+	const data = await unwrapResponseJson(res);
+	console.log("Compliance data received:", data);
+	return data;
+}
+
+export async function getComplianceStats() {
+	const res = await fetch(`${API_BASE}/invoke`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ action: "get_compliance_stats" }),
+	});
+	if (!res.ok) throw new Error("Failed to fetch compliance stats");
 	return unwrapResponseJson(res);
 }
 
@@ -109,13 +122,16 @@ export async function rollbackPatch(patchId: string, reason?: string) {
 }
 
 export async function generateCompliance(report_name?: string) {
+	console.log("Generating compliance report...");
 	const res = await fetch(`${API_BASE}/invoke`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ action: "generate_compliance", report_name }),
 	});
 	if (!res.ok) throw new Error("Generate compliance failed");
-	return unwrapResponseJson(res);
+	const result = await unwrapResponseJson(res);
+	console.log("Generate compliance result:", result);
+	return result;
 }
 
 export async function fetchDeployments() {

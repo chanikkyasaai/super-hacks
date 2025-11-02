@@ -12,11 +12,14 @@ import {
 	fetchPatches,
 } from "@/lib/api";
 import { DeploymentItem, PatchItem, StatCardProps } from "@/types/dashboard";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, RotateCcw } from "lucide-react";
 import { useState } from "react";
+import toast from "react-hot-toast";
 
 const DashboardView = () => {
+	const queryClient = useQueryClient();
+	
 	const { data: assetsData } = useQuery({
 		queryKey: ["assets"],
 		queryFn: fetchAssets,
@@ -53,24 +56,30 @@ const DashboardView = () => {
 	});
 	// Normalize backend patch items to the frontend PatchItem shape
 	const rawPatches = data?.patches ?? [];
-	const patches: PatchItem[] = rawPatches.map((p: any, idx: number) => {
-		// prefer patchId from backend, fall back to id or generate one
-		let id = p.patchId ?? p.id ?? `patch-${idx}`;
-		if (!id || id === "undefined") id = `patch-${idx}`;
+	const patches: PatchItem[] = rawPatches
+		.map((p: any, idx: number) => {
+			// prefer patchId from backend, fall back to id or generate unique one
+			let id = p.patchId ?? p.id;
+			// If no valid ID, generate a unique one based on index and timestamp
+			if (!id || id === "undefined" || id === "null") {
+				id = `patch-${Date.now()}-${idx}`;
+			}
 
-		return {
-			id,
-			description: p.description ?? p.title ?? "",
-			cve: p.cve ?? "",
-			severity: (p.severity as any) ?? "LOW",
-			impactScore:
-				typeof p.impactScore === "number"
-					? p.impactScore
-					: p.impactScore
-					? Number(p.impactScore)
-					: 0,
-		} as PatchItem;
-	});
+			return {
+				id,
+				description: p.description ?? p.title ?? "",
+				cve: p.cve ?? "",
+				severity: (p.severity as any) ?? "LOW",
+				impactScore:
+					typeof p.impactScore === "number"
+						? p.impactScore
+						: p.impactScore
+						? Number(p.impactScore)
+						: 0,
+			} as PatchItem;
+		})
+		// Sort by impact score descending (highest priority first)
+		.sort((a, b) => b.impactScore - a.impactScore);
 
 	const { data: deploymentsData, isLoading: depLoading } = useQuery({
 		queryKey: ["deployments"],
@@ -96,27 +105,52 @@ const DashboardView = () => {
 		setSelected(map);
 	};
 
-	const deploySelected = () => {
+	const deploySelected = async () => {
 		const ids = Object.keys(selected).filter((k) => selected[k]);
-		if (!ids.length) return alert("No patches selected");
-		bulkDeploy(ids)
-			.then((res) => {
-				alert("Bulk deploy result: " + JSON.stringify(res));
-				window.location.reload();
-			})
-			.catch((err) => alert("Bulk deploy failed: " + err.message));
+		if (!ids.length) {
+			toast.error("No patches selected");
+			return;
+		}
+		
+		await toast.promise(
+			bulkDeploy(ids),
+			{
+				loading: `Deploying ${ids.length} patch${ids.length > 1 ? 'es' : ''}...`,
+				success: (data) => {
+					// Refresh patches and deployments
+					queryClient.invalidateQueries({ queryKey: ["patches"] });
+					queryClient.invalidateQueries({ queryKey: ["deployments"] });
+					setSelected({}); // Clear selection
+					return `Successfully deployed ${ids.length} patch${ids.length > 1 ? 'es' : ''}!`;
+				},
+				error: (err) => `Deployment failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+			}
+		);
 	};
 
-	const rollbackSelected = () => {
+	const rollbackSelected = async () => {
 		const ids = Object.keys(selected).filter((k) => selected[k]);
-		if (!ids.length) return alert("No patches selected");
+		if (!ids.length) {
+			toast.error("No patches selected");
+			return;
+		}
+		
 		const reason = prompt("Reason for rollback (optional):") || undefined;
-		bulkRollback(ids, reason)
-			.then((res) => {
-				alert("Bulk rollback result: " + JSON.stringify(res));
-				window.location.reload();
-			})
-			.catch((err) => alert("Bulk rollback failed: " + err.message));
+		
+		await toast.promise(
+			bulkRollback(ids, reason),
+			{
+				loading: `Rolling back ${ids.length} patch${ids.length > 1 ? 'es' : ''}...`,
+				success: (data) => {
+					// Refresh patches and deployments
+					queryClient.invalidateQueries({ queryKey: ["patches"] });
+					queryClient.invalidateQueries({ queryKey: ["deployments"] });
+					setSelected({}); // Clear selection
+					return `Successfully rolled back ${ids.length} patch${ids.length > 1 ? 'es' : ''}!`;
+				},
+				error: (err) => `Rollback failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+			}
+		);
 	};
 
 	const compliancePercentage = 94;

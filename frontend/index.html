@@ -11,8 +11,14 @@
   <meta property="og:description" content="Real-time monitoring and management dashboard for system patches and compliance" />
     <meta property="og:type" content="website" />
     
-
-    
+    <!-- Suppress browser extension errors -->
+    <script>
+      window.addEventListener('error', (e) => {
+        if (e.message.includes('message channel closed')) {
+          e.preventDefault();
+        }
+      });
+    </script>
   </head>
 
   <body>

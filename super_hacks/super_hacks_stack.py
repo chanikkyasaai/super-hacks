@@ -101,8 +101,8 @@ class SuperHacksStack(Stack):
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL
         )
 
-        # Grant the lambda permissions to put objects in the compliance bucket
-        compliance_bucket.grant_put(ipo_agent_lambda)
+        # Grant the lambda full read/write permissions to the compliance bucket
+        compliance_bucket.grant_read_write(ipo_agent_lambda)
 
         # Now attach environment variables with actual physical resource names
         ipo_agent_lambda.add_environment(

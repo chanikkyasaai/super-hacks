@@ -225,6 +225,14 @@ def lambda_handler(event, context):
                     print('list_compliance error:', e)
                     return make_response(500, {"error": "list_compliance failed"})
 
+            if action == 'get_compliance_stats':
+                try:
+                    from tools import get_compliance_stats
+                    return make_response(200, get_compliance_stats())
+                except Exception as e:
+                    print('get_compliance_stats error:', e)
+                    return make_response(500, {"error": "get_compliance_stats failed"})
+
             if action == 'run_sandbox':
                 # Accept patch id from body or from top-level event (API Gateway may put fields at top-level)
                 patch_id = (

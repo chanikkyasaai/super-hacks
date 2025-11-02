@@ -3,52 +3,124 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { fetchCompliance, generateCompliance } from "@/lib/api";
+import { fetchCompliance, generateCompliance, getComplianceStats } from "@/lib/api";
 import { ComplianceFramework, StatCardProps } from "@/types/dashboard";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertCircle,
 	CheckCircle,
 	Clock,
 	FileDown,
 	Filter,
+	Loader2,
 } from "lucide-react";
+import { useState } from "react";
+import toast from "react-hot-toast";
 
 const ComplianceView = () => {
-	const stats: StatCardProps[] = [
-		{
-			title: "Overall Compliance",
-			value: "94%",
-			subtitle: "+2% from last quarter",
-		},
-		{
-			title: "Compliant Frameworks",
-			value: "8/10",
-			subtitle: "2 pending review",
-		},
-		{
-			title: "Last Audit",
-			value: "7 days",
-			subtitle: "Next audit in 23 days",
-		},
-		{
-			title: "Patches Deployed",
-			value: "156",
-			subtitle: "This quarter",
-		},
-	];
+	const [isGenerating, setIsGenerating] = useState(false);
+	const queryClient = useQueryClient();
 
-	const { data, isLoading, error } = useQuery({
+	// Fetch compliance stats
+	const { data: statsData, isLoading: statsLoading, error: statsError } = useQuery({
+		queryKey: ["complianceStats"],
+		queryFn: getComplianceStats,
+	});
+
+	// Fetch compliance frameworks/reports
+	const { data: complianceData, isLoading: complianceLoading, error: complianceError } = useQuery({
 		queryKey: ["compliance"],
 		queryFn: fetchCompliance,
 	});
 
-	const handleGenerate = () => {
-		generateCompliance()
-			.then((res) => alert("Report generated: " + JSON.stringify(res)))
-			.catch((err) => alert("Failed to generate report: " + err.message));
+	// Build stats array from real data
+	const stats: StatCardProps[] = statsData ? [
+		{
+			title: "Overall Compliance",
+			value: `${statsData.overallCompliance || 0}%`,
+			subtitle: statsData.complianceChange || "No change",
+		},
+		{
+			title: "Compliant Frameworks",
+			value: `${statsData.compliantFrameworks || 0}/${statsData.totalFrameworks || 10}`,
+			subtitle: `${statsData.pendingFrameworks || 0} pending review`,
+		},
+		{
+			title: "Last Audit",
+			value: `${statsData.daysSinceAudit || 0} days`,
+			subtitle: `Next audit in ${statsData.nextAuditDays || 0} days`,
+		},
+		{
+			title: "Patches Deployed",
+			value: `${statsData.patchesDeployed || 0}`,
+			subtitle: statsData.quarter || "This quarter",
+		},
+	] : [
+		{
+			title: "Overall Compliance",
+			value: "Loading...",
+			subtitle: "",
+		},
+		{
+			title: "Compliant Frameworks",
+			value: "Loading...",
+			subtitle: "",
+		},
+		{
+			title: "Last Audit",
+			value: "Loading...",
+			subtitle: "",
+		},
+		{
+			title: "Patches Deployed",
+			value: "Loading...",
+			subtitle: "",
+		},
+	];
+
+	const handleGenerate = async () => {
+		setIsGenerating(true);
+		try {
+			await toast.promise(
+				generateCompliance(),
+				{
+					loading: 'Generating compliance report...',
+					success: (result) => {
+						// Refresh compliance data
+						queryClient.invalidateQueries({ queryKey: ["compliance"] });
+						queryClient.invalidateQueries({ queryKey: ["complianceStats"] });
+						return `Report generated successfully! Total patches: ${result.summary?.totalPatches || 'N/A'}`;
+					},
+					error: (err) => `Failed to generate report: ${err instanceof Error ? err.message : 'Unknown error'}`,
+				}
+			);
+		} finally {
+			setIsGenerating(false);
+		}
 	};
-	const frameworks: ComplianceFramework[] = data?.frameworks ?? [];
+
+	const handleExport = () => {
+		// Export the current compliance data as JSON
+		const dataToExport = {
+			stats: statsData,
+			frameworks: complianceData?.frameworks || [],
+			exportedAt: new Date().toISOString(),
+		};
+		
+		const blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `compliance-export-${new Date().toISOString().split('T')[0]}.json`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+		
+		toast.success('Compliance report exported successfully!');
+	};
+
+	const frameworks: ComplianceFramework[] = complianceData?.frameworks || [];
 
 	const getStatusIcon = (status: ComplianceFramework["status"]) => {
 		switch (status) {
@@ -87,11 +159,24 @@ const ComplianceView = () => {
 							</p>
 						</div>
 						<div className="flex gap-2">
-							<Button variant="outline" onClick={handleGenerate}>
-								<Filter className="h-4 w-4 mr-2" />
-								Filter
+							<Button 
+								variant="outline" 
+								onClick={handleGenerate}
+								disabled={isGenerating}
+							>
+								{isGenerating ? (
+									<>
+										<Loader2 className="h-4 w-4 mr-2 animate-spin" />
+										Generating...
+									</>
+								) : (
+									<>
+										<Filter className="h-4 w-4 mr-2" />
+										Generate Report
+									</>
+								)}
 							</Button>
-							<Button variant="default">
+							<Button variant="default" onClick={handleExport}>
 								<FileDown className="h-4 w-4 mr-2" />
 								Export Report
 							</Button>
@@ -99,11 +184,21 @@ const ComplianceView = () => {
 					</div>
 				</header>
 
-				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-					{stats.map((stat, index) => (
-						<StatCard key={index} {...stat} />
-					))}
-				</div>
+				{statsLoading ? (
+					<div className="text-center py-8 text-muted-foreground">
+						Loading compliance statistics...
+					</div>
+				) : statsError ? (
+					<div className="text-center py-8 text-destructive">
+						Failed to load compliance statistics
+					</div>
+				) : (
+					<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+						{stats.map((stat, index) => (
+							<StatCard key={index} {...stat} />
+						))}
+					</div>
+				)}
 
 				<Card className="overflow-hidden">
 					<div className="p-6 border-b border-border bg-muted/30">
@@ -115,7 +210,20 @@ const ComplianceView = () => {
 						</p>
 					</div>
 					<div className="divide-y divide-border">
-						{frameworks.map((framework, index) => (
+						{complianceLoading ? (
+							<div className="p-8 text-center text-muted-foreground">
+								Loading compliance frameworks...
+							</div>
+						) : complianceError ? (
+							<div className="p-8 text-center text-destructive">
+								Failed to load compliance frameworks
+							</div>
+						) : frameworks.length === 0 ? (
+							<div className="p-8 text-center text-muted-foreground">
+								No compliance frameworks found. Click "Generate Report" to create one.
+							</div>
+						) : (
+							frameworks.map((framework, index) => (
 							<div key={index} className="p-6">
 								<div className="flex items-start justify-between mb-4">
 									<div className="flex items-center gap-3">
@@ -159,7 +267,8 @@ const ComplianceView = () => {
 									/>
 								</div>
 							</div>
-						))}
+						)))
+						}
 					</div>
 				</Card>
 

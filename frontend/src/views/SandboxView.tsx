@@ -5,15 +5,17 @@ import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { deployPatch, rollbackPatch, runSandbox } from "@/lib/api";
 import {
-	AIRecommendation,
+	Recommendation,
 	SandboxTest,
 	StatCardProps,
 } from "@/types/dashboard";
 import { Clock, Pause, Play, X } from "lucide-react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
+import toast from "react-hot-toast";
 
 const SandboxView = () => {
 	const { patchId } = useParams<{ patchId: string }>();
+	const navigate = useNavigate();
 
 	const stats: StatCardProps[] = [
 		{
@@ -64,7 +66,7 @@ const SandboxView = () => {
 		},
 	];
 
-	const aiRecommendations: AIRecommendation[] = [
+	const aiRecommendations: Recommendation[] = [
 		{
 			patchId: patchId || "PATCH-2024-001",
 			action: "DEPLOY",
@@ -79,35 +81,74 @@ const SandboxView = () => {
 
 	const handlePauseTest = (testName: string) => {
 		console.log("Pausing test:", testName);
+		toast.success(`Paused: ${testName}`);
 	};
 
 	const handleAbortTest = (testName: string) => {
 		console.log("Aborting test:", testName);
+		toast.error(`Aborted: ${testName}`);
 	};
 
-	const handleRecommendationAction = (action: string, patchId: string) => {
-		console.log(`${action} action for patch:`, patchId);
+	const handleRecommendationAction = async (action: string, patchId: string) => {
+		if (!patchId) {
+			toast.error("No patch ID provided");
+			return;
+		}
+		
 		if (action === "DEPLOY") {
-			// Attempt to run sandbox via backend
-			runSandbox(patchId)
-				.then((res) => console.log("Sandbox run result:", res))
-				.catch((err) => console.error("Sandbox run error:", err));
+			await toast.promise(
+				runSandbox(patchId),
+				{
+					loading: 'Running sandbox test...',
+					success: (res) => {
+						return `Sandbox test completed: ${res?.testResult || 'PASS'}`;
+					},
+					error: (err) => `Sandbox test failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+				}
+			);
 		}
 	};
 
-	const handleDeploy = () => {
-		if (!patchId) return alert("No patch id");
-		deployPatch(patchId)
-			.then((res) => alert("Deploy result: " + JSON.stringify(res)))
-			.catch((err) => alert("Deploy failed: " + err.message));
+	const handleDeploy = async () => {
+		if (!patchId) {
+			toast.error("No patch ID");
+			return;
+		}
+		
+		await toast.promise(
+			deployPatch(patchId),
+			{
+				loading: `Deploying patch ${patchId}...`,
+				success: (data) => {
+					// Navigate back to dashboard after successful deployment
+					setTimeout(() => navigate('/'), 1500);
+					return `Patch ${patchId} deployed successfully!`;
+				},
+				error: (err) => `Deployment failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+			}
+		);
 	};
 
-	const handleRollback = () => {
-		if (!patchId) return alert("No patch id");
+	const handleRollback = async () => {
+		if (!patchId) {
+			toast.error("No patch ID");
+			return;
+		}
+		
 		const reason = prompt("Reason for rollback (optional):") || undefined;
-		rollbackPatch(patchId, reason)
-			.then((res) => alert("Rollback result: " + JSON.stringify(res)))
-			.catch((err) => alert("Rollback failed: " + err.message));
+		
+		await toast.promise(
+			rollbackPatch(patchId, reason),
+			{
+				loading: `Rolling back patch ${patchId}...`,
+				success: (data) => {
+					// Navigate back to dashboard after successful rollback
+					setTimeout(() => navigate('/'), 1500);
+					return `Patch ${patchId} rolled back successfully!`;
+				},
+				error: (err) => `Rollback failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+			}
+		);
 	};
 
 	return (
