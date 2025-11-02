@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://reactjs.org/)
 [![CDK](https://img.shields.io/badge/AWS%20CDK-2.0-FF9900)](https://aws.amazon.com/cdk/)
-[![SuperHacks 2025](https://img.shields.io/badge/SuperHacks-2024-success)](https://superhacks.devpost.com/)
+[![SuperHacks 2025](https://img.shields.io/badge/SuperHacks-2025-success)](https://superhacks.devpost.com/)
 
 ---
 
@@ -174,35 +174,38 @@ Add sample patches to DynamoDB via AWS Console:
 }
 ```
 
-Repeat for additional patches (see demo script for recommended dataset).
+---
+
+## 🔍 **How to Verify It's Real (Not a Mockup)**
 
 ---
 
-## 🎬 **Demo Walkthrough**
+## 🔍 **How to Verify It's Real (Not a Mockup)**
 
-### **3-Minute Demo Script for Judges**
+### **Test 1: Database Integration**
+1. Open AWS Console → DynamoDB → `SuperHacksStack-IPOPatches...`
+2. Note a patch ID and its status (e.g., PATCH-2024-010, status: PENDING)
+3. Open the frontend → Dashboard → Find the same patch
+4. Click "Run" → Watch the status change in real-time
+5. Refresh DynamoDB → Verify status updated to ANALYZED/SANDBOX_TESTING
 
-**ACT 1: The Live Dashboard (45s)**
-1. Open Dashboard → Show AI Priority Queue with real patches from DynamoDB
-2. Point to impact scores (95, 92, 85, 45) → "AI prioritizes highest risk first"
-3. Hover over PATCH-2024-010 (status: PENDING) → "This is live data, not a mockup"
+### **Test 2: AI Agent Execution**
+1. Check Lambda logs: AWS Console → CloudWatch → `/aws/lambda/SuperHacksStack-IpoAgentFunction...`
+2. Look for: `"Calling Bedrock with model: anthropic.claude-3-5-sonnet"`
+3. Verify tool invocations: `"Tool: run_sandbox_test"`, `"Tool: prioritize_patch"`
+4. Confirm: Not hardcoded responses, actual Bedrock API calls
 
-**ACT 2: The AI Workflow (100s)**
-1. **Split screen**: Frontend (left) + DynamoDB Console (right)
-2. Click "Run" on PATCH-2024-010 → Trigger Lambda + Bedrock
-3. **Refresh DynamoDB** → Status changes: PENDING → ANALYZED → SANDBOX_TESTING → SANDBOX_PASSED
-4. Navigate to Event Logs → Show audit trail entries created in real-time
-5. Emphasize: "8 seconds for full AI-driven analysis vs. 15 hours manually"
+### **Test 3: Event Logging**
+1. Click "Run" on any patch in the Dashboard
+2. Navigate to Event Logs page
+3. See new entries appear: "Sandbox test started", "Test completed: PASS"
+4. Open DynamoDB → `SuperHacksStack-IPOEvents...` → Verify same events exist
 
-**ACT 3: The Business Impact (50s)**
-1. Select patch → Click "Deploy Selected" → Show toast notification
-2. Navigate to Compliance View → Stats auto-updated
-3. Click "Generate Report" → S3 report created with 10 frameworks
-4. Show: "SOC 2, ISO 27001, HIPAA, PCI DSS—all compliance needs covered"
-
-**Closing (25s)**
-- "Real AI with Bedrock Claude. Real infrastructure on AWS. Real business value—99.8% time reduction."
-- "Built for SuperOps Marketplace. Production-ready today."
+### **Test 4: Compliance Reports**
+1. Navigate to Compliance View
+2. Click "Generate Report"
+3. Check S3: AWS Console → S3 → `superhacksstack-ipocompliancereports...`
+4. Download the JSON file → Verify it contains real patch data from DynamoDB
 
 ---
 
@@ -285,6 +288,13 @@ npm run test
 ### **Data Protection**
 - ✅ All data encrypted at rest (DynamoDB + S3)
 - ✅ IAM least-privilege policies (Lambda can't delete tables)
+---
+
+## 🛡️ **Security & Compliance**
+
+### **Data Protection**
+- ✅ All data encrypted at rest (DynamoDB + S3)
+- ✅ IAM least-privilege policies (Lambda can't delete tables)
 - ✅ API Gateway with throttling limits (prevent abuse)
 - ✅ No secrets in code (uses AWS environment variables)
 
@@ -296,7 +306,7 @@ npm run test
 
 ---
 
-## 🎓 **Learning Resources**
+## 🎓 **Technical Resources**
 
 - [AWS Bedrock Documentation](https://docs.aws.amazon.com/bedrock/)
 - [Claude 3.5 Sonnet Guide](https://www.anthropic.com/claude)
@@ -305,37 +315,18 @@ npm run test
 
 ---
 
-## 🤝 **Contributing**
-
-We welcome contributions! This project was built for SuperHacks 2024 but is designed for real-world enterprise use.
-
-**Areas for Enhancement:**
-- [ ] Add AWS Cognito authentication
-- [ ] Implement real sandbox environment (EC2 + Docker)
-- [ ] Add Slack/Teams notifications for critical patches
-- [ ] Build GraphQL API for advanced queries
-- [ ] Create Terraform alternative to CDK
-
----
-
-## 📄 **License**
-
-MIT License - See `LICENSE` file for details.
-
----
-
 ## 🙏 **Acknowledgments**
 
-- **AWS SuperOps Global Hackathon** for providing the infrastructure and opportunity
-- **Anthropic** for Claude 3.5 Sonnet's exceptional agentic capabilities
-- **AWS Bedrock Team** for seamless model integration
-- **Open Source Community** for React, TypeScript, and shadcn/ui components
+Built for **AWS SuperOps Global Hackathon 2025** using Amazon Bedrock, AWS Lambda, DynamoDB, and S3.
+
+Special thanks to the AWS and Anthropic teams for providing world-class AI infrastructure.
 
 ---
 
 ## 📞 **Contact**
 
 **Team Lead**: Chanikya Nelapatla  
+**Team Member**: Logarathan SV  
 **GitHub**: [@chanikkyasaai](https://github.com/chanikkyasaai)  
 **Project Repository**: [super-hacks](https://github.com/chanikkyasaai/super-hacks)
 
@@ -343,11 +334,11 @@ MIT License - See `LICENSE` file for details.
 
 <div align="center">
 
-**Built with ❤️ for SuperHacks 2024**
+**Built with ❤️ for SuperHacks 2025**
 
 *Transforming enterprise security with AI-driven automation*
 
 [![GitHub Stars](https://img.shields.io/github/stars/chanikkyasaai/super-hacks?style=social)](https://github.com/chanikkyasaai/super-hacks)
-[![SuperHacks](https://img.shields.io/badge/SuperHacks-2024-success)](https://superhacks.devpost.com/)
+[![SuperHacks](https://img.shields.io/badge/SuperHacks-2025-success)](https://superhacks.devpost.com/)
 
 </div>
