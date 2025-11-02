@@ -54,9 +54,10 @@ export async function fetchEvents() {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ action: "list_events" }),
 	});
-	console.log(await res.json());
 	if (!res.ok) throw new Error("Failed to fetch events");
-	return unwrapResponseJson(res);
+	const data = await unwrapResponseJson(res);
+	console.log("Events data:", data);
+	return data;
 }
 
 export async function fetchCompliance() {

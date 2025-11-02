@@ -165,7 +165,20 @@ const EventLogView = () => {
 								</p>
 							</div>
 							<div className="divide-y divide-border">
-								{eventLogs.map((log, index) => (
+								{isLoading ? (
+									<div className="p-8 text-center text-muted-foreground">
+										Loading events...
+									</div>
+								) : error ? (
+									<div className="p-8 text-center text-destructive">
+										Failed to load events
+									</div>
+								) : eventLogs.length === 0 ? (
+									<div className="p-8 text-center text-muted-foreground">
+										No events logged yet. Run a sandbox test or deploy a patch to see activity.
+									</div>
+								) : (
+									eventLogs.map((log, index) => (
 									<div
 										key={index}
 										className="p-4 hover:bg-muted/30 transition-colors"
@@ -208,7 +221,8 @@ const EventLogView = () => {
 											</div>
 										</div>
 									</div>
-								))}
+								)))
+								}
 							</div>
 						</Card>
 					</div>

@@ -2,10 +2,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { prioritize, runSandbox } from "@/lib/api";
 import { PatchItem } from "@/types/dashboard";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useState } from "react";
 
 const PatchQueueItem = ({ patch }: { patch: PatchItem }) => {
+	const [isRunning, setIsRunning] = useState(false);
+	const [sandboxResult, setSandboxResult] = useState<Record<string, unknown> | null>(null);
 	const getSeverityColor = (severity: PatchItem["severity"]) => {
 		const colors = {
 			CRITICAL: "bg-severity-critical text-white",
@@ -43,7 +46,7 @@ const PatchQueueItem = ({ patch }: { patch: PatchItem }) => {
 						// Prevent link navigation
 						e.preventDefault();
 						e.stopPropagation();
-						const cve = (patch as any).cve || patch.id;
+						const cve = (patch as PatchItem & { cve?: string }).cve || patch.id;
 						prioritize(cve)
 							.then((res) => {
 								try {
@@ -67,19 +70,35 @@ const PatchQueueItem = ({ patch }: { patch: PatchItem }) => {
 				<Button
 					size="sm"
 					variant="default"
-					onClick={(e) => {
+					onClick={async (e) => {
 						e.preventDefault();
 						e.stopPropagation();
-						runSandbox(patch.id as string)
-							.then((res) =>
-								alert("Sandbox run: " + JSON.stringify(res))
-							)
-							.catch((err) =>
-								alert("Sandbox error: " + err.message)
-							);
+						setIsRunning(true);
+						setSandboxResult(null);
+						try {
+							const result = await runSandbox(patch.id as string);
+							setSandboxResult(result);
+							const message = result?.response 
+								? `Sandbox Test Result:\n\n${result.response}`
+								: `Sandbox Test Result:\n\nTest Result: ${result?.testResult || 'N/A'}\nConfidence: ${result?.confidence || 'N/A'}%`;
+							alert(message);
+						} catch (err) {
+							const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+							alert(`Sandbox test failed: ${errorMsg}`);
+						} finally {
+							setIsRunning(false);
+						}
 					}}
+					disabled={isRunning}
 				>
-					Run
+					{isRunning ? (
+						<>
+							<Loader2 className="h-4 w-4 mr-2 animate-spin" />
+							Running...
+						</>
+					) : (
+						'Run'
+					)}
 				</Button>
 				<ChevronRight className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
 			</div>

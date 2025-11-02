@@ -131,12 +131,26 @@ def prioritize_patch(cve_info: str) -> dict:
             pass
 
     print(f"Calculated Impact Score: {impact_score} for Patch ID: {patch_id}")
+    
+    # Record prioritization event
+    _record_event(
+        'prioritization', 
+        patch_id, 
+        f'Patch {patch_id} analyzed with impact score: {impact_score}', 
+        status='success',
+        details={'impactScore': impact_score, 'is_high_risk': is_high_risk, 'severity': patch.get('severity')}
+    )
+    
     return {"patchId": patch_id, "impactScore": impact_score, "is_high_risk": is_high_risk}
 
 
 def run_sandbox_test(patch_id: str) -> dict:
     """Simulates a sandbox test for a given patchId and updates its status."""
     print(f"TOOL: Starting sandbox test for Patch ID: '{patch_id}'...")
+    
+    # Record start event
+    _record_event('sandbox_test', patch_id, f'Sandbox test started for patch {patch_id}', status='info')
+    
     patches_table = get_table('PATCHES_TABLE_NAME')
     if patches_table is not None:
         try:
@@ -169,6 +183,17 @@ def run_sandbox_test(patch_id: str) -> dict:
             pass
 
     print(f"Sandbox test result: {test_result}")
+    
+    # Record completion event
+    event_status = 'success' if test_result == 'PASS' else 'warning'
+    _record_event(
+        'sandbox_test', 
+        patch_id, 
+        f'Sandbox test completed for patch {patch_id}: {test_result}', 
+        status=event_status,
+        details={'testResult': test_result, 'finalStatus': final_status}
+    )
+    
     # Confidence can be static for now
     return {"testResult": test_result, "confidence": 94}
 
