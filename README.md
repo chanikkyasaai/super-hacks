@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://reactjs.org/)
 [![CDK](https://img.shields.io/badge/AWS%20CDK-2.0-FF9900)](https://aws.amazon.com/cdk/)
-[![SuperHacks 2024](https://img.shields.io/badge/SuperHacks-2024-success)](https://superhacks.devpost.com/)
+[![SuperHacks 2025](https://img.shields.io/badge/SuperHacks-2024-success)](https://superhacks.devpost.com/)
 
 ---
 
