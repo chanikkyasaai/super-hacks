@@ -2,6 +2,9 @@ import boto3
 import json
 import time
 import random
+import string
+import urllib.request
+import urllib.error
 from datetime import datetime
 import uuid
 import os
@@ -226,6 +229,8 @@ def _record_event(event_type: str, patch_id: Optional[str], message: str, status
 
 def deploy_patch(patch_id: str, scheduled_time: Optional[str] = None) -> dict:
     """Simulate deploying a patch: update status and write an event."""
+    CUSTOMER_WEBHOOK_URL = "https://eojvqz6sjhomniv.m.pipedream.net"
+    
     patches_table = get_table('PATCHES_TABLE_NAME')
     if patches_table is None:
         return {"status": "error", "message": "PATCHES_TABLE_NAME not configured in environment."}
@@ -243,6 +248,36 @@ def deploy_patch(patch_id: str, scheduled_time: Optional[str] = None) -> dict:
             ExpressionAttributeValues={
                 ':st': 'DEPLOYED', ':d': deployed_at, ':zero': 0}
         )
+        
+        # Send webhook to external customer system
+        try:
+            webhook_payload = {
+                'patchId': patch_id,
+                'deployedAt': deployed_at,
+                'message': 'Patch deployment triggered',
+                'demo_id': ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            }
+            # Use urllib from the standard library to avoid third-party dependencies in Lambda
+            data = json.dumps(webhook_payload).encode('utf-8')
+            req = urllib.request.Request(
+                CUSTOMER_WEBHOOK_URL,
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    status_code = resp.getcode()
+            except urllib.error.HTTPError as http_err:
+                # HTTPError contains a status code
+                status_code = getattr(http_err, 'code', None)
+
+            _record_event('webhook', patch_id, f'Deployment webhook sent successfully to external system',
+                         status='info', details={'webhook_url': CUSTOMER_WEBHOOK_URL, 'response_status': status_code})
+        except Exception as webhook_error:
+            _record_event('webhook', patch_id, f'Failed to send deployment webhook: {str(webhook_error)}',
+                         status='warning', details={'webhook_url': CUSTOMER_WEBHOOK_URL})
+            
     except Exception as e:
         return {"status": "error", "message": f"DynamoDB update failed: {e}"}
 
