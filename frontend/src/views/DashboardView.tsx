@@ -16,10 +16,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
+import { useNavigate } from "react-router-dom";
 
 const DashboardView = () => {
 	const queryClient = useQueryClient();
-	
+
 	const { data: assetsData } = useQuery({
 		queryKey: ["assets"],
 		queryFn: fetchAssets,
@@ -105,27 +106,43 @@ const DashboardView = () => {
 		setSelected(map);
 	};
 
+	const navigate = useNavigate();
+
+	const runSelected = () => {
+		const ids = Object.keys(selected).filter((k) => selected[k]);
+		if (!ids.length) {
+			toast.error("No patches selected to run");
+			return;
+		}
+		// Open sandbox view for first selected patch and request run
+		navigate(`/sandbox/${ids[0]}?run=true`);
+	};
+
 	const deploySelected = async () => {
 		const ids = Object.keys(selected).filter((k) => selected[k]);
 		if (!ids.length) {
 			toast.error("No patches selected");
 			return;
 		}
-		
-		await toast.promise(
-			bulkDeploy(ids),
-			{
-				loading: `Deploying ${ids.length} patch${ids.length > 1 ? 'es' : ''}...`,
-				success: (data) => {
-					// Refresh patches and deployments
-					queryClient.invalidateQueries({ queryKey: ["patches"] });
-					queryClient.invalidateQueries({ queryKey: ["deployments"] });
-					setSelected({}); // Clear selection
-					return `Successfully deployed ${ids.length} patch${ids.length > 1 ? 'es' : ''}!`;
-				},
-				error: (err) => `Deployment failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-			}
-		);
+
+		await toast.promise(bulkDeploy(ids), {
+			loading: `Deploying ${ids.length} patch${
+				ids.length > 1 ? "es" : ""
+			}...`,
+			success: (data) => {
+				// Refresh patches and deployments
+				queryClient.invalidateQueries({ queryKey: ["patches"] });
+				queryClient.invalidateQueries({ queryKey: ["deployments"] });
+				setSelected({}); // Clear selection
+				return `Successfully deployed ${ids.length} patch${
+					ids.length > 1 ? "es" : ""
+				}!`;
+			},
+			error: (err) =>
+				`Deployment failed: ${
+					err instanceof Error ? err.message : "Unknown error"
+				}`,
+		});
 	};
 
 	const rollbackSelected = async () => {
@@ -134,23 +151,27 @@ const DashboardView = () => {
 			toast.error("No patches selected");
 			return;
 		}
-		
+
 		const reason = prompt("Reason for rollback (optional):") || undefined;
-		
-		await toast.promise(
-			bulkRollback(ids, reason),
-			{
-				loading: `Rolling back ${ids.length} patch${ids.length > 1 ? 'es' : ''}...`,
-				success: (data) => {
-					// Refresh patches and deployments
-					queryClient.invalidateQueries({ queryKey: ["patches"] });
-					queryClient.invalidateQueries({ queryKey: ["deployments"] });
-					setSelected({}); // Clear selection
-					return `Successfully rolled back ${ids.length} patch${ids.length > 1 ? 'es' : ''}!`;
-				},
-				error: (err) => `Rollback failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-			}
-		);
+
+		await toast.promise(bulkRollback(ids, reason), {
+			loading: `Rolling back ${ids.length} patch${
+				ids.length > 1 ? "es" : ""
+			}...`,
+			success: (data) => {
+				// Refresh patches and deployments
+				queryClient.invalidateQueries({ queryKey: ["patches"] });
+				queryClient.invalidateQueries({ queryKey: ["deployments"] });
+				setSelected({}); // Clear selection
+				return `Successfully rolled back ${ids.length} patch${
+					ids.length > 1 ? "es" : ""
+				}!`;
+			},
+			error: (err) =>
+				`Rollback failed: ${
+					err instanceof Error ? err.message : "Unknown error"
+				}`,
+		});
 	};
 
 	const compliancePercentage = 94;

@@ -3,19 +3,101 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { deployPatch, rollbackPatch, runSandbox } from "@/lib/api";
+import { useSandboxWSContext } from "@/context/SandboxWSContext";
+import useSandboxWS from "@/hooks/useSandboxWS";
+import { deployPatch, rollbackPatch } from "@/lib/api";
 import {
-	Recommendation,
+	AIRecommendation as Recommendation,
 	SandboxTest,
 	StatCardProps,
 } from "@/types/dashboard";
 import { Clock, Pause, Play, X } from "lucide-react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useEffect, useRef } from "react";
 import toast from "react-hot-toast";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 const SandboxView = () => {
 	const { patchId } = useParams<{ patchId: string }>();
 	const navigate = useNavigate();
+
+	// WS URL from Vite env (set VITE_SANDBOX_WS in dev .env or replace with actual URL)
+	const WS_URL = (import.meta as any).env?.VITE_SANDBOX_WS as
+		| string
+		| undefined;
+
+	// Prefer the shared WS connection from context when available to avoid multiple connections
+	const ctx = useSandboxWSContext();
+	const local = useSandboxWS(WS_URL, patchId);
+	const {
+		logs,
+		result: sandboxResult,
+		send,
+		isConnected,
+		lastError,
+		logContainerRef,
+	} = ctx ?? local;
+
+	// If we're using the shared ctx (no patchId bound) then explicitly subscribe
+	// to this patchId so the server will forward logs/results for it.
+	const subscribedRef = useRef(false);
+	useEffect(() => {
+		if (!ctx) return; // only when using shared provider
+		if (!patchId) return;
+		if (!isConnected) return;
+		if (subscribedRef.current) return;
+		try {
+			send({ type: "subscribe", patchId });
+			subscribedRef.current = true;
+			console.debug(
+				"SandboxView: subscribed to patch via shared WS provider",
+				patchId
+			);
+		} catch (e) {
+			console.warn("SandboxView: failed to subscribe", e);
+		}
+	}, [ctx, patchId, isConnected, send]);
+
+	const location = useLocation();
+	const wantAutoRun = useRef(false);
+
+	// When sandbox result arrives, optionally show a toast summary
+	useEffect(() => {
+		if (!sandboxResult) return;
+		toast.success(`Sandbox result: ${sandboxResult.status}`);
+	}, [sandboxResult]);
+
+	const triggerRun = (pid?: string) => {
+		if (!pid) {
+			toast.error("No patch id");
+			return;
+		}
+		if (isConnected) {
+			send({ type: "run_test", patchId: pid });
+			toast.success("Sandbox run requested via WebSocket");
+		} else {
+			toast.error("Cannot run sandbox: WebSocket not connected");
+		}
+	};
+
+	// If the URL includes ?run=true, request a run when connected (or immediately if already connected)
+	useEffect(() => {
+		const params = new URLSearchParams(location.search);
+		const auto = params.get("run");
+		if (!auto) return;
+		if (!patchId) return;
+		if (isConnected) {
+			triggerRun(patchId);
+		} else {
+			wantAutoRun.current = true;
+		}
+	}, [location.search, isConnected, patchId]);
+
+	useEffect(() => {
+		if (wantAutoRun.current && isConnected && patchId) {
+			triggerRun(patchId);
+			wantAutoRun.current = false;
+		}
+	}, [isConnected, patchId]);
 
 	const stats: StatCardProps[] = [
 		{
@@ -89,23 +171,23 @@ const SandboxView = () => {
 		toast.error(`Aborted: ${testName}`);
 	};
 
-	const handleRecommendationAction = async (action: string, patchId: string) => {
+	const handleRecommendationAction = async (
+		action: string,
+		patchId: string
+	) => {
 		if (!patchId) {
 			toast.error("No patch ID provided");
 			return;
 		}
-		
+
 		if (action === "DEPLOY") {
-			await toast.promise(
-				runSandbox(patchId),
-				{
-					loading: 'Running sandbox test...',
-					success: (res) => {
-						return `Sandbox test completed: ${res?.testResult || 'PASS'}`;
-					},
-					error: (err) => `Sandbox test failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-				}
-			);
+			// Prefer WebSocket-triggered runs. If WS connected send run_test, else notify user.
+			if (isConnected) {
+				send({ type: "run_test", patchId });
+				toast.success("Sandbox run requested via WebSocket");
+			} else {
+				toast.error("Cannot run sandbox: WebSocket not connected");
+			}
 		}
 	};
 
@@ -114,19 +196,30 @@ const SandboxView = () => {
 			toast.error("No patch ID");
 			return;
 		}
-		
-		await toast.promise(
-			deployPatch(patchId),
-			{
-				loading: `Deploying patch ${patchId}...`,
-				success: (data) => {
-					// Navigate back to dashboard after successful deployment
-					setTimeout(() => navigate('/'), 1500);
-					return `Patch ${patchId} deployed successfully!`;
-				},
-				error: (err) => `Deployment failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-			}
-		);
+
+		// Require sandbox PASS + an AI recommendation to allow deploy
+		const canDeploy =
+			sandboxResult?.status === "PASS" &&
+			aiRecommendations.some((r) => r.action === "DEPLOY");
+		if (!canDeploy) {
+			toast.error(
+				"Deploy disabled: require sandbox PASS and AI recommendation to deploy."
+			);
+			return;
+		}
+
+		await toast.promise(deployPatch(patchId), {
+			loading: `Deploying patch ${patchId}...`,
+			success: (data) => {
+				// Navigate back to dashboard after successful deployment
+				setTimeout(() => navigate("/"), 1500);
+				return `Patch ${patchId} deployed successfully!`;
+			},
+			error: (err) =>
+				`Deployment failed: ${
+					err instanceof Error ? err.message : "Unknown error"
+				}`,
+		});
 	};
 
 	const handleRollback = async () => {
@@ -134,21 +227,21 @@ const SandboxView = () => {
 			toast.error("No patch ID");
 			return;
 		}
-		
+
 		const reason = prompt("Reason for rollback (optional):") || undefined;
-		
-		await toast.promise(
-			rollbackPatch(patchId, reason),
-			{
-				loading: `Rolling back patch ${patchId}...`,
-				success: (data) => {
-					// Navigate back to dashboard after successful rollback
-					setTimeout(() => navigate('/'), 1500);
-					return `Patch ${patchId} rolled back successfully!`;
-				},
-				error: (err) => `Rollback failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-			}
-		);
+
+		await toast.promise(rollbackPatch(patchId, reason), {
+			loading: `Rolling back patch ${patchId}...`,
+			success: (data) => {
+				// Navigate back to dashboard after successful rollback
+				setTimeout(() => navigate("/"), 1500);
+				return `Patch ${patchId} rolled back successfully!`;
+			},
+			error: (err) =>
+				`Rollback failed: ${
+					err instanceof Error ? err.message : "Unknown error"
+				}`,
+		});
 	};
 
 	return (
@@ -163,7 +256,11 @@ const SandboxView = () => {
 							{patchId}
 						</Badge>
 						<div className="ml-4 flex gap-2">
-							<Button variant="default" onClick={handleDeploy}>
+							<Button
+								variant="default"
+								onClick={handleDeploy}
+								disabled={!(sandboxResult?.status === "PASS")}
+							>
 								Deploy
 							</Button>
 							<Button variant="outline" onClick={handleRollback}>
@@ -300,6 +397,105 @@ const SandboxView = () => {
 										</div>
 									</div>
 								))}
+							</div>
+						</Card>
+
+						{/* Live logs / sandbox console */}
+						<Card className="mt-6">
+							<div className="p-6 border-b border-border bg-muted/30">
+								<h2 className="text-xl font-semibold text-foreground">
+									Live Sandbox Logs
+								</h2>
+								<p className="text-sm text-muted-foreground mt-1">
+									Real-time output from the sandbox agent
+								</p>
+							</div>
+							<div className="p-4">
+								<div className="mb-3 flex items-center justify-between">
+									<div className="text-sm text-muted-foreground">
+										WS:{" "}
+										{isConnected ? (
+											<span className="text-success">
+												Connected
+											</span>
+										) : (
+											<span className="text-warning">
+												Disconnected
+											</span>
+										)}
+									</div>
+									<div className="flex gap-2">
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={() =>
+												triggerRun(patchId ?? "")
+											}
+										>
+											Run Sandbox
+										</Button>
+										<Button
+											size="sm"
+											variant="default"
+											onClick={() => {
+												// send a lightweight ping/run via WS if connected
+												if (isConnected)
+													send({
+														type: "run_test",
+														patchId,
+													});
+											}}
+										>
+											Trigger via WS
+										</Button>
+									</div>
+								</div>
+								<div
+									ref={logContainerRef as any}
+									className="h-64 overflow-auto bg-black/5 p-3 font-mono text-sm rounded"
+								>
+									{logs.length === 0 ? (
+										<div className="text-muted-foreground">
+											No logs yet. Run the sandbox to
+											start streaming output.
+										</div>
+									) : (
+										logs.map((l, i) => (
+											<div
+												key={i}
+												className={
+													l.type === "result"
+														? "text-success"
+														: ""
+												}
+											>
+												<span className="text-xs text-muted-foreground mr-2">
+													{new Date(
+														l.timestamp ??
+															Date.now()
+													).toLocaleTimeString()}
+												</span>
+												{l.line ??
+													l.message ??
+													JSON.stringify(l)}
+											</div>
+										))
+									)}
+								</div>
+								{sandboxResult && (
+									<div className="mt-3">
+										<strong>Result:</strong>{" "}
+										{sandboxResult.status}{" "}
+										{sandboxResult.confidence
+											? ` — ${sandboxResult.confidence}%`
+											: ""}
+									</div>
+								)}
+								{lastError && (
+									<div className="mt-2 text-destructive">
+										{String(lastError)}
+									</div>
+								)}
 							</div>
 						</Card>
 					</div>

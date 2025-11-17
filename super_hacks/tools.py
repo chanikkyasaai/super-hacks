@@ -134,71 +134,156 @@ def prioritize_patch(cve_info: str) -> dict:
             pass
 
     print(f"Calculated Impact Score: {impact_score} for Patch ID: {patch_id}")
-    
+
     # Record prioritization event
     _record_event(
-        'prioritization', 
-        patch_id, 
-        f'Patch {patch_id} analyzed with impact score: {impact_score}', 
+        'prioritization',
+        patch_id,
+        f'Patch {patch_id} analyzed with impact score: {impact_score}',
         status='success',
-        details={'impactScore': impact_score, 'is_high_risk': is_high_risk, 'severity': patch.get('severity')}
+        details={'impactScore': impact_score,
+                 'is_high_risk': is_high_risk, 'severity': patch.get('severity')}
     )
-    
+
     return {"patchId": patch_id, "impactScore": impact_score, "is_high_risk": is_high_risk}
 
 
-def run_sandbox_test(patch_id: str) -> dict:
-    """Simulates a sandbox test for a given patchId and updates its status."""
-    print(f"TOOL: Starting sandbox test for Patch ID: '{patch_id}'...")
-    
-    # Record start event
-    _record_event('sandbox_test', patch_id, f'Sandbox test started for patch {patch_id}', status='info')
-    
-    patches_table = get_table('PATCHES_TABLE_NAME')
-    if patches_table is not None:
+def run_sandbox_test(patch_id: str, agent_id: str = 'agent-demo-1', cmd: Optional[str] = None) -> dict:
+    """Trigger a sandbox run on an agent via WebSocket or API Gateway.
+
+    Behavior:
+      - If SANDBOX_WS env starts with 'ws' use websocket-client to send run_test message.
+      - If SANDBOX_WS looks like an API Gateway WebSocket URL (contains 'execute-api'), attempt to post via apigatewaymanagementapi.
+      - Immediately write a 'sandbox_started' event to the events table (IPO-Events or IPO_EVENTS_TABLE env).
+
+    Returns: {status: 'started', correlationId: <uuid>}
+    """
+    correlation_id = str(uuid.uuid4())
+    sandbox_ws = os.getenv('SANDBOX_WS') or os.getenv('SANDBOX_WS_URL')
+    events_table_name = os.getenv('IPO_EVENTS_TABLE') or os.getenv(
+        'EVENTS_TABLE_NAME') or 'IPO-Events'
+    events_table = get_table(
+        'EVENTS_TABLE_NAME') or get_table(events_table_name)
+
+    ts = datetime.utcnow().isoformat()
+    start_item = {
+        'eventId': str(uuid.uuid4()),
+        'timestamp': ts,
+        'type': 'sandbox_started',
+        'status': 'info',
+        'source': 'IPO',
+        'message': f'Sandbox started for patch {patch_id}',
+        'patchId': patch_id,
+        'agentId': agent_id,
+        'correlationId': correlation_id,
+        'details': {'cmd': cmd}
+    }
+    try:
+        if events_table is not None:
+            events_table.put_item(Item=start_item)
+    except Exception as e:
+        print('Failed to write sandbox_started event to DDB:', e)
+
+    # If SANDBOX_WS is not set, fallback to existing mock behavior
+    if not sandbox_ws:
+        print('[tools] SANDBOX_WS not configured; using mock sandbox behavior')
+        # Mark patch as SANDBOX_TESTING then randomly PASS/FAIL after delay
+        patches_table = get_table('PATCHES_TABLE_NAME')
+        if patches_table is not None:
+            try:
+                patches_table.update_item(Key={'patchId': patch_id}, UpdateExpression='SET #st = :s', ExpressionAttributeNames={
+                                          '#st': 'status'}, ExpressionAttributeValues={':s': 'SANDBOX_TESTING'})
+            except Exception:
+                pass
+        time.sleep(1)
+        test_result = random.choice(['PASS', 'FAIL'])
+        final_status = 'SANDBOX_PASSED' if test_result == 'PASS' else 'SANDBOX_FAILED'
+        if patches_table is not None:
+            try:
+                patches_table.update_item(Key={'patchId': patch_id}, UpdateExpression='SET #st = :s', ExpressionAttributeNames={
+                                          '#st': 'status'}, ExpressionAttributeValues={':s': final_status})
+            except Exception:
+                pass
+        # Record completion event
+        _record_event('sandbox_result', patch_id, f'Sandbox completed: {test_result}', status='success' if test_result == 'PASS' else 'warning', details={
+                      'result': test_result, 'correlationId': correlation_id})
+        return {'status': 'started', 'correlationId': correlation_id}
+
+    # Try WebSocket path
+    try:
+        if sandbox_ws.startswith('ws'):
+            try:
+                # import locally to avoid hard dependency at module import time
+                import websocket as _ws
+                msg = {'type': 'run_test', 'patchId': patch_id, 'cmd': cmd,
+                       'correlationId': correlation_id, 'agentId': agent_id}
+                # create_connection is simple and blocking for this prototype
+                try:
+                    conn = _ws.create_connection(sandbox_ws, timeout=5)
+                    conn.send(json.dumps(msg))
+                    conn.close()
+                    print('[tools] Sent run_test over raw websocket')
+                except Exception as e:
+                    print('[tools] websocket send failed', e)
+            except Exception:
+                print(
+                    '[tools] websocket-client not available; cannot send WS message')
+        elif 'execute-api' in sandbox_ws:
+            # API Gateway WebSocket: best-effort post_to_connection
+            try:
+                from urllib.parse import urlparse
+                p = urlparse(sandbox_ws)
+                endpoint = f"https://{p.netloc}"
+                mgmt = boto3.client(
+                    'apigatewaymanagementapi', endpoint_url=endpoint)
+                connection_id = os.getenv('SANDBOX_CONN_ID')
+                if not connection_id:
+                    print(
+                        '[tools] SANDBOX_CONN_ID not set; cannot post to API Gateway connection')
+                else:
+                    data = json.dumps({'type': 'run_test', 'patchId': patch_id, 'cmd': cmd,
+                                      'correlationId': correlation_id, 'agentId': agent_id})
+                    mgmt.post_to_connection(
+                        ConnectionId=connection_id, Data=data.encode('utf-8'))
+                    print('[tools] Posted to API Gateway connection')
+            except Exception as e:
+                print('[tools] API Gateway post failed', e)
+        else:
+            print(
+                '[tools] SANDBOX_WS configured but not recognized, value=', sandbox_ws)
+    except Exception as e:
+        print('[tools] error while attempting to trigger sandbox:', e)
+
+    return {'status': 'started', 'correlationId': correlation_id}
+
+
+def wait_for_sandbox_result(patch_id: str, timeout_seconds: int = 120):
+    """Poll the events table for an event with type 'sandbox_result' for patch_id.
+
+    Returns the event item or None if timed out.
+    """
+    events_table = get_table('EVENTS_TABLE_NAME')
+    if events_table is None:
+        print('[tools] EVENTS table not configured; cannot wait for sandbox result')
+        return None
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
         try:
-            # 1. Set status to SANDBOX_TESTING
-            patches_table.update_item(
-                Key={'patchId': patch_id},
-                UpdateExpression="SET #st = :stat",
-                ExpressionAttributeNames={'#st': 'status'},
-                ExpressionAttributeValues={':stat': 'SANDBOX_TESTING'}
+            resp = events_table.scan(
+                FilterExpression='type = :t AND patchId = :p',
+                ExpressionAttributeValues={
+                    ':t': 'sandbox_result', ':p': patch_id}
             )
-        except Exception:
-            pass
-
-    # 2. Simulate a delay (can be short)
-    time.sleep(1)
-
-    # 3. Determine result and update status
-    test_result = random.choice(['PASS', 'FAIL'])
-    final_status = 'SANDBOX_PASSED' if test_result == 'PASS' else 'SANDBOX_FAILED'
-
-    if patches_table is not None:
-        try:
-            patches_table.update_item(
-                Key={'patchId': patch_id},
-                UpdateExpression="SET #st = :stat",
-                ExpressionAttributeNames={'#st': 'status'},
-                ExpressionAttributeValues={':stat': final_status}
-            )
-        except Exception:
-            pass
-
-    print(f"Sandbox test result: {test_result}")
-    
-    # Record completion event
-    event_status = 'success' if test_result == 'PASS' else 'warning'
-    _record_event(
-        'sandbox_test', 
-        patch_id, 
-        f'Sandbox test completed for patch {patch_id}: {test_result}', 
-        status=event_status,
-        details={'testResult': test_result, 'finalStatus': final_status}
-    )
-    
-    # Confidence can be static for now
-    return {"testResult": test_result, "confidence": 94}
+            items = resp.get('Items', [])
+            if items:
+                # return most recent
+                items.sort(key=lambda x: x.get(
+                    'timestamp') or '', reverse=True)
+                return items[0]
+        except Exception as e:
+            print('[tools] error scanning events table:', e)
+        time.sleep(2)
+    return None
 
 
 def _record_event(event_type: str, patch_id: Optional[str], message: str, status: str = 'info', details: Optional[dict] = None) -> dict:
@@ -230,25 +315,36 @@ def _record_event(event_type: str, patch_id: Optional[str], message: str, status
 def deploy_patch(patch_id: str, scheduled_time: Optional[str] = None) -> dict:
     """Simulate deploying a patch: update status and write an event."""
     CUSTOMER_WEBHOOK_URL = "https://eojvqz6sjhomniv.m.pipedream.net"
-    
+
     patches_table = get_table('PATCHES_TABLE_NAME')
     if patches_table is None:
         return {"status": "error", "message": "PATCHES_TABLE_NAME not configured in environment."}
+    # Validate patch exists and is eligible for deployment
+    try:
+        existing = patches_table.get_item(Key={'patchId': patch_id})
+        item = existing.get('Item') if isinstance(existing, dict) else None
+    except Exception as e:
+        return {"status": "error", "message": f"DynamoDB get_item failed: {e}"}
+
+    if not item:
+        return {"status": "error", "message": f"Patch {patch_id} not found"}
+
+    current_status = item.get('status') or item.get('state') or ''
+    allowed = ['SANDBOX_PASSED', 'ANALYZED']
+    if current_status not in allowed:
+        return {"status": "error", "message": f"Patch {patch_id} not eligible for deploy (status={current_status})"}
 
     try:
-        update_values = {':st': 'DEPLOYED'}
-        expr_vals = {':st': 'DEPLOYED'}
-        expr_names = {'#st': 'status'}
         # Record deployed time
         deployed_at = datetime.utcnow().isoformat()
         patches_table.update_item(
             Key={'patchId': patch_id},
             UpdateExpression="SET impactScore = if_not_exists(impactScore, :zero), #st = :st, deployedAt = :d",
-            ExpressionAttributeNames=expr_names,
+            ExpressionAttributeNames={'#st': 'status'},
             ExpressionAttributeValues={
                 ':st': 'DEPLOYED', ':d': deployed_at, ':zero': 0}
         )
-        
+
         # Send webhook to external customer system
         try:
             webhook_payload = {
@@ -273,16 +369,18 @@ def deploy_patch(patch_id: str, scheduled_time: Optional[str] = None) -> dict:
                 status_code = getattr(http_err, 'code', None)
 
             _record_event('webhook', patch_id, f'Deployment webhook sent successfully to external system',
-                         status='info', details={'webhook_url': CUSTOMER_WEBHOOK_URL, 'response_status': status_code})
+                          status='info', details={'webhook_url': CUSTOMER_WEBHOOK_URL, 'response_status': status_code})
         except Exception as webhook_error:
             _record_event('webhook', patch_id, f'Failed to send deployment webhook: {str(webhook_error)}',
-                         status='warning', details={'webhook_url': CUSTOMER_WEBHOOK_URL})
-            
+                          status='warning', details={'webhook_url': CUSTOMER_WEBHOOK_URL})
+
     except Exception as e:
         return {"status": "error", "message": f"DynamoDB update failed: {e}"}
 
-    evt = _record_event('deployment', patch_id, f'Patch {patch_id} deployed', status='success', details={
-                        'scheduled_time': scheduled_time})
+    # Record a deploy event with actor metadata
+    evt = _record_event('deploy', patch_id, f'Patch {patch_id} deployed', status='success', details={
+        'scheduled_time': scheduled_time, 'actor': os.getenv('DEPLOY_ACTOR', 'demo')
+    })
     return {"status": "ok", "patchId": patch_id, "deployedAt": deployed_at, "event": evt}
 
 
@@ -304,7 +402,7 @@ def rollback_patch(patch_id: str, reason: Optional[str] = None) -> dict:
         return {"status": "error", "message": f"DynamoDB update failed: {e}"}
 
     evt = _record_event(
-        'rollback', patch_id, f'Patch {patch_id} rolled back', status='warning', details={'reason': reason})
+        'rollback', patch_id, f'Patch {patch_id} rolled back', status='warning', details={'reason': reason, 'actor': os.getenv('DEPLOY_ACTOR', 'demo')})
     return {"status": "ok", "patchId": patch_id, "rolledBackAt": rolled_at, "event": evt}
 
 
@@ -363,7 +461,7 @@ def generate_compliance_report(report_name: Optional[str] = None) -> dict:
         # Add some variance to scores based on framework weight
         variance = random.uniform(-10, 10) * fw["weight"]
         score = max(0, min(100, base_score + variance))
-        
+
         # Determine status based on score
         if score >= 80:
             status = "compliant"
@@ -371,7 +469,7 @@ def generate_compliance_report(report_name: Optional[str] = None) -> dict:
             status = "pending"
         else:
             status = "non-compliant"
-        
+
         frameworks.append({
             "name": fw["name"],
             "lastAudit": datetime.utcnow().isoformat(),
@@ -407,7 +505,7 @@ def generate_compliance_report(report_name: Optional[str] = None) -> dict:
 
 def get_compliance_stats() -> dict:
     """Calculate real-time compliance statistics from patches and assets.
-    
+
     Returns:
         - Overall compliance percentage
         - Compliant frameworks count
@@ -416,7 +514,7 @@ def get_compliance_stats() -> dict:
     """
     patches_table = get_table('PATCHES_TABLE_NAME')
     assets_table = get_table('ASSETS_TABLE_NAME')
-    
+
     # Get all patches
     patches = []
     if patches_table is not None:
@@ -425,7 +523,7 @@ def get_compliance_stats() -> dict:
             patches = response.get('Items', [])
         except Exception:
             patches = []
-    
+
     # Get all assets
     assets = []
     if assets_table is not None:
@@ -434,31 +532,36 @@ def get_compliance_stats() -> dict:
             assets = response.get('Items', [])
         except Exception:
             assets = []
-    
+
     # Calculate statistics
     total_patches = len(patches)
     deployed_patches = sum(1 for p in patches if p.get('status') == 'DEPLOYED')
     analyzed_patches = sum(1 for p in patches if p.get('status') == 'ANALYZED')
-    failed_patches = sum(1 for p in patches if p.get('status') in ['SANDBOX_FAILED', 'DEPLOYMENT_FAILED'])
-    
+    failed_patches = sum(1 for p in patches if p.get('status') in [
+                         'SANDBOX_FAILED', 'DEPLOYMENT_FAILED'])
+
     # Calculate compliance percentage (deployed / total patches with known status)
-    patches_with_status = [p for p in patches if p.get('status') in ['DEPLOYED', 'SANDBOX_PASSED', 'ANALYZED', 'SANDBOX_FAILED']]
-    compliant_patches = [p for p in patches_with_status if p.get('status') in ['DEPLOYED', 'SANDBOX_PASSED']]
-    
+    patches_with_status = [p for p in patches if p.get(
+        'status') in ['DEPLOYED', 'SANDBOX_PASSED', 'ANALYZED', 'SANDBOX_FAILED']]
+    compliant_patches = [p for p in patches_with_status if p.get(
+        'status') in ['DEPLOYED', 'SANDBOX_PASSED']]
+
     if len(patches_with_status) > 0:
-        compliance_percentage = int((len(compliant_patches) / len(patches_with_status)) * 100)
+        compliance_percentage = int(
+            (len(compliant_patches) / len(patches_with_status)) * 100)
     else:
         compliance_percentage = 0
-    
+
     # Count compliant frameworks (mock for now - would come from actual framework checks)
     # For demo: assume we have 10 frameworks, and compliance % determines how many are compliant
     total_frameworks = 10
-    compliant_frameworks = int((compliance_percentage / 100) * total_frameworks)
-    
+    compliant_frameworks = int(
+        (compliance_percentage / 100) * total_frameworks)
+
     # Days since last audit (check events table for last compliance_report event)
     events_table = get_table('EVENTS_TABLE_NAME')
     days_since_audit = 7  # default
-    
+
     if events_table is not None:
         try:
             # Scan for compliance_report events
@@ -470,25 +573,28 @@ def get_compliance_stats() -> dict:
             events = response.get('Items', [])
             if events:
                 # Find most recent
-                events_sorted = sorted(events, key=lambda e: e.get('timestamp', ''), reverse=True)
+                events_sorted = sorted(events, key=lambda e: e.get(
+                    'timestamp', ''), reverse=True)
                 last_event = events_sorted[0]
                 last_timestamp = last_event.get('timestamp')
                 if last_timestamp:
                     from datetime import datetime
-                    last_dt = datetime.fromisoformat(last_timestamp.replace('Z', '+00:00'))
-                    days_since_audit = (datetime.utcnow().replace(tzinfo=last_dt.tzinfo) - last_dt).days
+                    last_dt = datetime.fromisoformat(
+                        last_timestamp.replace('Z', '+00:00'))
+                    days_since_audit = (datetime.utcnow().replace(
+                        tzinfo=last_dt.tzinfo) - last_dt).days
         except Exception as e:
             print(f"Error fetching audit date: {e}")
-    
+
     # Calculate patches deployed "this quarter" (last 90 days)
     from datetime import datetime, timedelta
     ninety_days_ago = (datetime.utcnow() - timedelta(days=90)).isoformat()
-    
+
     patches_this_quarter = sum(
-        1 for p in patches 
+        1 for p in patches
         if p.get('status') == 'DEPLOYED' and p.get('deployedAt', '') >= ninety_days_ago
     )
-    
+
     return {
         "overallCompliance": compliance_percentage,
         "complianceChange": "+2%",  # Could calculate from historical data
@@ -596,24 +702,25 @@ def list_compliance(max_items: int = 50) -> dict:
 
     s3 = boto3.client('s3')
     try:
-        resp = s3.list_objects_v2(Bucket=bucket, MaxKeys=max_items, Prefix='compliance/')
+        resp = s3.list_objects_v2(
+            Bucket=bucket, MaxKeys=max_items, Prefix='compliance/')
         contents = resp.get('Contents', [])
-        
+
         if not contents:
             return {"frameworks": []}
-        
+
         # Sort by LastModified to get the most recent report
         contents.sort(key=lambda x: x.get('LastModified', ''), reverse=True)
-        
+
         # Get the most recent report
         most_recent = contents[0]
         key = most_recent.get('Key')
-        
+
         try:
             getr = s3.get_object(Bucket=bucket, Key=key)
             raw = getr['Body'].read()
             parsed = json.loads(raw)
-            
+
             # Extract frameworks from the report
             frameworks = parsed.get('frameworks', [])
             return {"frameworks": frameworks}
