@@ -7,6 +7,7 @@ import ComplianceView from "@/views/ComplianceView";
 import DashboardView from "@/views/DashboardView";
 import EventLogView from "@/views/EventLogView";
 import SandboxView from "@/views/SandboxView";
+import SettingsView from "@/views/SettingsView";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster as HotToast } from "react-hot-toast";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
@@ -58,6 +59,10 @@ const App = () => (
 								element={<ComplianceView />}
 							/>
 							<Route path="/logs" element={<EventLogView />} />
+							<Route
+								path="/settings"
+								element={<SettingsView />}
+							/>
 						</Route>
 						<Route path="*" element={<NotFound />} />
 					</Routes>

@@ -1,5 +1,17 @@
-export const API_BASE =
-	"https://n72hgwfh6b.execute-api.us-east-1.amazonaws.com/prod";
+function _getApiBaseFromSettings(): string | null {
+	try {
+		const raw = localStorage.getItem("super_hacks_config");
+		if (!raw) return null;
+		const cfg = JSON.parse(raw);
+		if (cfg && cfg.API_URL) return cfg.API_URL.replace(/\/+$/, "");
+	} catch (e) {
+		// ignore
+	}
+	// fallback to build-time default
+	return "https://n72hgwfh6b.execute-api.us-east-1.amazonaws.com/prod";
+}
+
+export const API_BASE = _getApiBaseFromSettings();
 
 async function unwrapResponseJson(res: Response) {
 	const data = await res.json();

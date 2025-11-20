@@ -43,6 +43,22 @@ def get_dynamodb_resource() -> Any:
     return _dynamodb
 
 
+def _load_runtime_config() -> dict:
+    """Load runtime config written by the backend /api/config into a dict.
+
+    This allows tools called inside the backend process to honor settings the
+    frontend persisted (e.g. SANDBOX_WS, EVENTS_TABLE_NAME, DYNAMODB_ENDPOINT_URL).
+    """
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    try:
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
 def get_table(table_env: str) -> Optional[Any]:
     """Return a DynamoDB Table object.
 
@@ -54,11 +70,16 @@ def get_table(table_env: str) -> Optional[Any]:
     Otherwise it treats table_env as the literal table name.
     """
     # Prefer explicit environment variable if present
+    runtime = _load_runtime_config()
     if table_env in os.environ:
         table_name = os.environ.get(table_env)
     else:
-        # Treat the passed value as the table name directly
-        table_name = table_env
+        # allow runtime config to override common keys
+        if runtime and runtime.get(table_env):
+            table_name = runtime.get(table_env)
+        else:
+            # Treat the passed value as the table name directly
+            table_name = table_env
 
     if not table_name:
         return None
@@ -159,8 +180,10 @@ def run_sandbox_test(patch_id: str, agent_id: str = 'agent-demo-1', cmd: Optiona
     Returns: {status: 'started', correlationId: <uuid>}
     """
     correlation_id = str(uuid.uuid4())
-    sandbox_ws = os.getenv('SANDBOX_WS') or os.getenv('SANDBOX_WS_URL')
-    events_table_name = os.getenv('IPO_EVENTS_TABLE') or os.getenv(
+    runtime = _load_runtime_config()
+    sandbox_ws = os.getenv('SANDBOX_WS') or runtime.get(
+        'SANDBOX_WS') or os.getenv('SANDBOX_WS_URL')
+    events_table_name = runtime.get('EVENTS_TABLE_NAME') or os.getenv('IPO_EVENTS_TABLE') or os.getenv(
         'EVENTS_TABLE_NAME') or 'IPO-Events'
     events_table = get_table(
         'EVENTS_TABLE_NAME') or get_table(events_table_name)
@@ -262,27 +285,72 @@ def wait_for_sandbox_result(patch_id: str, timeout_seconds: int = 120):
 
     Returns the event item or None if timed out.
     """
+    runtime = _load_runtime_config()
+    # allow runtime-config override for timeout
+    try:
+        cfg_timeout = runtime.get('SANDBOX_WAIT_SECONDS')
+        if cfg_timeout:
+            effective_timeout = int(cfg_timeout)
+        else:
+            effective_timeout = timeout_seconds
+    except Exception:
+        effective_timeout = timeout_seconds
+
     events_table = get_table('EVENTS_TABLE_NAME')
-    if events_table is None:
-        print('[tools] EVENTS table not configured; cannot wait for sandbox result')
-        return None
-    deadline = time.time() + timeout_seconds
+    deadline = time.time() + effective_timeout
+
+    # If we don't have a DDB table, attempt to read local fallback events file
+    fallback_path = os.path.join(os.path.dirname(
+        __file__), 'logs', 'ws-events.jsonl')
+
     while time.time() < deadline:
+        # Try DynamoDB if available
+        if events_table is not None:
+            try:
+                resp = events_table.scan(
+                    FilterExpression='type = :t AND patchId = :p',
+                    ExpressionAttributeValues={
+                        ':t': 'sandbox_result', ':p': patch_id}
+                )
+                items = resp.get('Items', [])
+                if items:
+                    items.sort(key=lambda x: x.get(
+                        'timestamp') or '', reverse=True)
+                    return items[0]
+            except Exception as e:
+                print('[tools] error scanning events table:', e)
+
+        # Local fallback: scan JSONL file for sandbox_result
         try:
-            resp = events_table.scan(
-                FilterExpression='type = :t AND patchId = :p',
-                ExpressionAttributeValues={
-                    ':t': 'sandbox_result', ':p': patch_id}
-            )
-            items = resp.get('Items', [])
-            if items:
-                # return most recent
-                items.sort(key=lambda x: x.get(
-                    'timestamp') or '', reverse=True)
-                return items[0]
+            if os.path.exists(fallback_path):
+                with open(fallback_path, 'r', encoding='utf-8') as f:
+                    lines = f.read().splitlines()
+                matches = []
+                for ln in lines:
+                    try:
+                        obj = json.loads(ln)
+                        # Accept either 'type' or nested payload.type shape
+                        t = obj.get('type') or (
+                            obj.get('payload') or {}).get('type')
+                        pid = obj.get('patchId') or (
+                            obj.get('payload') or {}).get('patchId')
+                        if t == 'sandbox_result' and pid == patch_id:
+                            matches.append(obj)
+                    except Exception:
+                        continue
+                if matches:
+                    # sort by timestamp if present
+                    try:
+                        matches.sort(key=lambda x: x.get(
+                            'timestamp') or '', reverse=True)
+                    except Exception:
+                        pass
+                    return matches[0]
         except Exception as e:
-            print('[tools] error scanning events table:', e)
+            print('[tools] error reading fallback events file:', e)
+
         time.sleep(2)
+
     return None
 
 

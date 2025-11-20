@@ -5,9 +5,18 @@ import json
 from decimal import Decimal
 from datetime import datetime
 import os
+import logging
+from botocore.exceptions import ClientError
 
 # Import tools module robustly so this file can be executed both as a package
 # (super_hacks.agent) and as a top-level module during local tests.
+# Fallback used when tools module isn't available
+
+
+def _missing(*args, **kwargs):
+    raise RuntimeError('tools module not available')
+
+
 try:
     # When running as a package
     from super_hacks import tools as _tools
@@ -22,6 +31,11 @@ if _tools is not None:
     prioritize_patch = getattr(_tools, 'prioritize_patch')
     run_sandbox_test = getattr(_tools, 'run_sandbox_test')
     list_patches = getattr(_tools, 'list_patches')
+    # optional tools
+    try:
+        list_events = getattr(_tools, 'list_events')
+    except Exception:
+        list_events = _missing
 else:
     # Define fallbacks that raise if used
     def _missing(*args, **kwargs):
@@ -30,6 +44,7 @@ else:
     prioritize_patch = _missing
     run_sandbox_test = _missing
     list_patches = _missing
+    list_events = _missing
 
 # Load local .env for developer convenience if python-dotenv is available.
 try:
@@ -160,8 +175,30 @@ def lambda_handler(event, context):
 
         print('DEBUG: parsed body ->', body)
 
+        # If caller is targeting the runtime config endpoint, delegate to config handler
+        # Support API Gateway proxy shapes: path may be at event['path'] or requestContext.http.path
+        path = event.get('path') or event.get('rawPath') or event.get(
+            'requestContext', {}).get('http', {}).get('path')
+        if path and path.endswith('/api/config'):
+            # Delegate to config_handler which returns a dict {statusCode, body}
+            cfg_resp = config_handler(event, context)
+            try:
+                body_obj = json.loads(cfg_resp.get('body', '{}'))
+            except Exception:
+                body_obj = cfg_resp.get('body', '')
+            return make_response(cfg_resp.get('statusCode', 200), body_obj)
+
         # If caller supplies an 'action' (usually inside the request body), handle it directly via tools
         action = body.get('action') or event.get('action')
+        # New action: update_config — allow callers to update runtime config via action
+        if action == 'update_config':
+            cfg = body.get('config') if isinstance(body, dict) else {}
+            if not isinstance(cfg, dict):
+                return make_response(400, {"error": "config must be an object"})
+            contains_creds = any(k in cfg for k in (
+                "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"))
+            ok = _write_config_to_ssm(cfg, secure=bool(contains_creds))
+            return make_response(200, {"ok": ok, "stored_secure": bool(contains_creds)})
         if action:
             if action == 'list_patches':
                 print('DEBUG: action=list_patches')
@@ -389,3 +426,104 @@ def invoke(payload: dict) -> dict:
         return body
     except Exception:
         return {"error": "Failed to parse response", "raw": resp}
+
+
+# --- SSM config helpers and AWS-compatible handlers (merged from aws_handlers) ---
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+SSM_PARAM_NAME = os.getenv("SSM_PARAM_NAME", "/super-hacks/config")
+
+
+def _read_config_from_ssm(param_name: str = SSM_PARAM_NAME) -> dict:
+    ssm = boto3.client("ssm", region_name=os.getenv("AWS_REGION") or None)
+    try:
+        resp = ssm.get_parameter(Name=param_name, WithDecryption=True)
+        return json.loads(resp["Parameter"]["Value"])
+    except ClientError as e:
+        logger.info("SSM parameter not found or access denied: %s", e)
+        return {}
+    except Exception as e:
+        logger.exception("error reading SSM parameter: %s", e)
+        return {}
+
+
+def _write_config_to_ssm(cfg: dict, param_name: str = SSM_PARAM_NAME, secure: bool = False) -> bool:
+    ssm = boto3.client("ssm", region_name=os.getenv("AWS_REGION") or None)
+    try:
+        ssm.put_parameter(Name=param_name, Value=json.dumps(cfg, default=str), Type=(
+            "SecureString" if secure else "String"), Overwrite=True)
+        return True
+    except Exception as e:
+        logger.exception("failed to write SSM param: %s", e)
+        return False
+
+
+def config_handler(event, context):
+    """Lambda handler to GET/POST runtime config in SSM.
+
+    - GET: returns current config
+    - POST: expects JSON body and writes it to SSM (overwrite)
+    """
+    method = event.get('httpMethod') or event.get(
+        'requestContext', {}).get('http', {}).get('method')
+    if method == 'POST':
+        try:
+            body = event.get('body')
+            if event.get('isBase64Encoded'):
+                import base64
+                body = base64.b64decode(body).decode('utf-8')
+            cfg = json.loads(body or '{}')
+        except Exception:
+            return {"statusCode": 400, "body": json.dumps({"error": "invalid json"})}
+        # If the posted config contains AWS credentials, store as SecureString
+        contains_creds = any(k in cfg for k in (
+            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"))
+        ok = _write_config_to_ssm(cfg, secure=bool(contains_creds))
+        # Return whether the stored payload contained secrets so frontend can inform the user
+        return {"statusCode": 200, "body": json.dumps({"ok": ok, "stored_secure": bool(contains_creds)})}
+    else:
+        cfg = _read_config_from_ssm()
+        return {"statusCode": 200, "body": json.dumps(cfg)}
+
+
+def invoke_handler(event, context):
+    """Adapter Lambda handler that maps action requests to tools functions.
+
+    Expects POST JSON: { action: 'list_patches'|'run_sandbox'|... }
+    """
+    try:
+        body = event.get('body')
+        if event.get('isBase64Encoded'):
+            import base64
+            body = base64.b64decode(body).decode('utf-8')
+        payload = json.loads(body or '{}')
+    except Exception:
+        return {"statusCode": 400, "body": json.dumps({"error": "invalid json"})}
+
+    action = payload.get('action')
+    try:
+        # reuse functions already imported/defined above
+        if action == 'list_patches':
+            return {"statusCode": 200, "body": json.dumps(list_patches())}
+        if action == 'list_events':
+            return {"statusCode": 200, "body": json.dumps(list_events())}
+        if action == 'run_sandbox':
+            patch_id = payload.get('patch_id') or payload.get('patchId')
+            if not patch_id:
+                return {"statusCode": 400, "body": json.dumps({"error": "patch_id required"})}
+            res = run_sandbox_test(patch_id)
+            return {"statusCode": 200, "body": json.dumps(res)}
+        if action == 'prioritize':
+            cve = payload.get('cve_info')
+            return {"statusCode": 200, "body": json.dumps(prioritize_patch(cve))}
+        if action == 'deploy_patch':
+            patch_id = payload.get('patch_id')
+            res = _tools.deploy_patch(patch_id, payload.get(
+                'scheduled_time')) if _tools is not None else {}
+            return {"statusCode": 200, "body": json.dumps(res)}
+
+        return {"statusCode": 400, "body": json.dumps({"error": "unknown action"})}
+    except Exception as e:
+        logger.exception("invoke handler error: %s", e)
+        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}

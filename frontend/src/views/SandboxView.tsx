@@ -58,7 +58,6 @@ const SandboxView = () => {
 	}, [ctx, patchId, isConnected, send]);
 
 	const location = useLocation();
-	const wantAutoRun = useRef(false);
 
 	// When sandbox result arrives, optionally show a toast summary
 	useEffect(() => {
@@ -79,25 +78,7 @@ const SandboxView = () => {
 		}
 	};
 
-	// If the URL includes ?run=true, request a run when connected (or immediately if already connected)
-	useEffect(() => {
-		const params = new URLSearchParams(location.search);
-		const auto = params.get("run");
-		if (!auto) return;
-		if (!patchId) return;
-		if (isConnected) {
-			triggerRun(patchId);
-		} else {
-			wantAutoRun.current = true;
-		}
-	}, [location.search, isConnected, patchId]);
-
-	useEffect(() => {
-		if (wantAutoRun.current && isConnected && patchId) {
-			triggerRun(patchId);
-			wantAutoRun.current = false;
-		}
-	}, [isConnected, patchId]);
+	// Note: auto-run via URL param has been removed to avoid accidental runs
 
 	const stats: StatCardProps[] = [
 		{
